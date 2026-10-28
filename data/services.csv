@@ -1,0 +1,5 @@
+id,name,customer_facing,critical
+SVC001,Order Service,true,true
+SVC002,Payment Service,true,true
+SVC003,Authentication Service,false,true
+SVC004,Notification Service,false,false

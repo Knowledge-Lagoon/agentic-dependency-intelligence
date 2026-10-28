@@ -1,0 +1,3 @@
+id,name,redundancy
+DB001,PostgreSQL,false
+DB002,User Database,true
