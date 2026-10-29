@@ -65,4 +65,63 @@ class DependencyGraph:
 
         with self.driver.session() as session:
             result = session.run(query, name=name)
-            return [record.data() for 
+            return [record.data() for record in result]
+
+
+def main():
+    graph = DependencyGraph()
+
+    try:
+        component = "PostgreSQL"
+
+        print()
+        print(f"Component: {component}")
+        print("=" * 50)
+
+        found = graph.find_component(component)
+
+        if not found:
+            print("Component not found.")
+            return
+
+        print("\nComponent details:")
+        for item in found:
+            print(
+                f"  {item['type']}: "
+                f"{item['name']} ({item['id']})"
+            )
+
+        print("\nDirect impact:")
+
+        direct = graph.direct_dependents(component)
+
+        if not direct:
+            print("  None")
+
+        for item in direct:
+            print(
+                f"  {item['dependent']} "
+                f"[{item['type']}] "
+                f"via {item['relationship']}"
+            )
+
+        print("\nBlast radius:")
+
+        impacted = graph.blast_radius(component)
+
+        if not impacted:
+            print("  None")
+
+        for item in impacted:
+            print(
+                f"  Level {item['distance']}: "
+                f"{item['name']} "
+                f"[{item['type']}]"
+            )
+
+    finally:
+        graph.close()
+
+
+if __name__ == "__main__":
+    main()
