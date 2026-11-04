@@ -1,13 +1,4 @@
 class DecisionEngine:
-    """
-    Deterministic operational decision model.
-
-    Input:
-        Structured evidence produced by ImpactAnalyzer.
-
-    Output:
-        Severity, decision, score and reason codes.
-    """
 
     def evaluate(self, impact):
         if not impact:
@@ -21,49 +12,64 @@ class DecisionEngine:
         score = 0
         reasons = []
 
+        component = impact["component"]
+
         # Production impact
-        if impact.get("production"):
+        if impact["production_impact"]:
             score += 3
-            reasons.append("PRODUCTION")
+            reasons.append("PRODUCTION_IMPACT")
 
-        # Critical service impact
-        if impact.get("critical"):
-            score += 3
-            reasons.append("CRITICAL_SERVICE")
-
-        # Customer-facing impact
-        if impact.get("customer_facing"):
+        # Failed component itself is critical
+        if component.get("critical") is True:
             score += 2
-            reasons.append("CUSTOMER_FACING")
+            reasons.append("CRITICAL_COMPONENT")
 
-        # Lack of redundancy
-        if impact.get("redundancy") is False:
+        # Critical services appear in the blast radius
+        if impact["critical_service_impact"]:
+            score += 2
+            reasons.append("CRITICAL_SERVICE_IMPACT")
+
+        # Customer-facing services appear in blast radius
+        if impact["customer_facing_service_impact"]:
+            score += 2
+            reasons.append("CUSTOMER_FACING_IMPACT")
+
+        # Only databases currently carry redundancy information
+        if component.get("redundancy") is False:
             score += 2
             reasons.append("NO_REDUNDANCY")
 
-        # Blast radius
+        # Blast-radius size
         impacted_count = (
-            len(impact.get("direct_impact", []))
-            + len(impact.get("indirect_impact", []))
+            impact["affected_service_count"]
+            + impact["affected_application_count"]
         )
 
-        if impacted_count >= 3:
+        if impacted_count >= 4:
             score += 2
             reasons.append("WIDE_BLAST_RADIUS")
+
         elif impacted_count >= 1:
             score += 1
             reasons.append("DEPENDENCY_IMPACT")
 
-        # Translate score into operational decision.
-        if score >= 9:
+        # Deep dependency chains add hidden downstream risk
+        if impact["max_dependency_depth"] >= 3:
+            score += 1
+            reasons.append("DEEP_DEPENDENCY_CHAIN")
+
+        if score >= 10:
             severity = "CRITICAL"
             decision = "ESCALATE"
-        elif score >= 6:
+
+        elif score >= 7:
             severity = "HIGH"
             decision = "ESCALATE"
-        elif score >= 3:
+
+        elif score >= 4:
             severity = "MEDIUM"
             decision = "INVESTIGATE"
+
         else:
             severity = "LOW"
             decision = "MONITOR"
@@ -75,54 +81,3 @@ class DecisionEngine:
             "reason_codes": reasons,
             "impacted_components": impacted_count,
         }
-
-
-def print_decision(decision):
-    print()
-    print("DECISION MODEL")
-    print("=" * 60)
-
-    print(f"Severity:            {decision['severity']}")
-    print(f"Decision:            {decision['decision']}")
-    print(f"Decision score:       {decision['score']}")
-
-    if "impacted_components" in decision:
-        print(
-            f"Impacted components: {decision['impacted_components']}"
-        )
-
-    print()
-    print("Reason codes:")
-
-    for reason in decision["reason_codes"]:
-        print(f"  - {reason}")
-
-
-def main():
-
-    # Temporary test evidence.
-    # This mirrors the PostgreSQL scenario produced by ImpactAnalyzer.
-
-    test_impact = {
-        "production": True,
-        "critical": True,
-        "customer_facing": True,
-        "redundancy": False,
-        "direct_impact": [
-            {"name": "Payment Service"}
-        ],
-        "indirect_impact": [
-            {"name": "Order Service"},
-            {"name": "Customer Portal"},
-        ],
-    }
-
-    engine = DecisionEngine()
-
-    decision = engine.evaluate(test_impact)
-
-    print_decision(decision)
-
-
-if __name__ == "__main__":
-    main()

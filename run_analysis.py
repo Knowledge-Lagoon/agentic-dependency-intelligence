@@ -9,18 +9,32 @@ from decision.model_client import (
 
 
 def print_impact(impact):
-    print()
-    print("IMPACT ANALYSIS")
-    print("-" * 60)
-
     component = impact["component"]
 
-    print(f"Component:       {component['name']}")
-    print(f"Type:            {component['type']}")
-    print(f"Production:      {impact['production']}")
-    print(f"Customer-facing: {impact['customer_facing']}")
-    print(f"Critical:        {impact['critical']}")
-    print(f"Redundancy:      {impact['redundancy']}")
+    # ---------------------------------------------------------
+    # Failed component
+    # ---------------------------------------------------------
+
+    print()
+    print("FAILED COMPONENT")
+    print("-" * 60)
+
+    print(f"Component:        {component['name']}")
+    print(f"Type:             {component['type']}")
+    print(f"Critical:         {component.get('critical')}")
+    print(
+        f"Customer-facing:  "
+        f"{component.get('customer_facing')}"
+    )
+    print(f"Redundancy:       {component.get('redundancy')}")
+
+    # ---------------------------------------------------------
+    # Blast radius
+    # ---------------------------------------------------------
+
+    print()
+    print("BLAST RADIUS")
+    print("-" * 60)
 
     print()
     print("Direct impact:")
@@ -53,6 +67,72 @@ def print_impact(impact):
                 f"[{item['type']}]"
             )
 
+    # ---------------------------------------------------------
+    # Impact summary
+    # ---------------------------------------------------------
+
+    print()
+    print("IMPACT SUMMARY")
+    print("-" * 60)
+
+    print(
+        f"Production impact:              "
+        f"{impact['production_impact']}"
+    )
+
+    print(
+        f"Critical service impact:        "
+        f"{impact['critical_service_impact']}"
+    )
+
+    print(
+        f"Customer-facing service impact: "
+        f"{impact['customer_facing_service_impact']}"
+    )
+
+    print(
+        f"Affected services:              "
+        f"{impact['affected_service_count']}"
+    )
+
+    print(
+        f"Affected applications:          "
+        f"{impact['affected_application_count']}"
+    )
+
+    print(
+        f"Direct impact count:            "
+        f"{impact['direct_impact_count']}"
+    )
+
+    print(
+        f"Indirect impact count:          "
+        f"{impact['indirect_impact_count']}"
+    )
+
+    print(
+        f"Maximum dependency depth:       "
+        f"{impact['max_dependency_depth']}"
+    )
+
+    print()
+    print("Affected applications:")
+
+    if not impact["affected_applications"]:
+        print("  None")
+    else:
+        for item in impact["affected_applications"]:
+            print(f"  - {item['name']}")
+
+    print()
+    print("Affected services:")
+
+    if not impact["affected_services"]:
+        print("  None")
+    else:
+        for item in impact["affected_services"]:
+            print(f"  - {item['name']}")
+
     print()
     print("Owners:")
 
@@ -72,18 +152,18 @@ def print_impact(impact):
             print(f"  - {environment}")
 
 
-def print_baseline_decision(decision):
+def print_policy_decision(decision):
     print()
     print("DETERMINISTIC POLICY BASELINE")
     print("-" * 60)
 
-    print(f"Severity: {decision['severity']}")
-    print(f"Action:   {decision['decision']}")
-    print(f"Score:    {decision['score']}")
+    print(f"Severity:          {decision['severity']}")
+    print(f"Action:            {decision['decision']}")
+    print(f"Policy Risk Score: {decision['score']}")
 
     if "impacted_components" in decision:
         print(
-            "Impacted components: "
+            f"Impacted components: "
             f"{decision['impacted_components']}"
         )
 
@@ -97,40 +177,33 @@ def print_baseline_decision(decision):
             print(f"  - {reason}")
 
 
-def print_comparison(baseline, model_result):
+def print_comparison(policy, model_result):
     answers = model_result["answers"]
 
     ai_action = answers["action"]["choice"]
     ai_severity = answers["severity"]["choice"]
 
-    baseline_action = baseline["decision"]
-    baseline_severity = baseline["severity"]
+    policy_action = policy["decision"]
+    policy_severity = policy["severity"]
+
+    severity_match = (
+        policy_severity == ai_severity
+    )
+
+    action_match = (
+        policy_action == ai_action
+    )
 
     print()
     print("DECISION COMPARISON")
     print("-" * 60)
 
-    print(
-        f"Policy severity: {baseline_severity}"
-    )
-    print(
-        f"AI severity:     {ai_severity}"
-    )
+    print(f"Policy severity: {policy_severity}")
+    print(f"AI severity:     {ai_severity}")
 
-    print(
-        f"Policy action:   {baseline_action}"
-    )
-    print(
-        f"AI action:       {ai_action}"
-    )
-
-    severity_match = (
-        baseline_severity == ai_severity
-    )
-
-    action_match = (
-        baseline_action == ai_action
-    )
+    print()
+    print(f"Policy action:   {policy_action}")
+    print(f"AI action:       {ai_action}")
 
     print()
     print(
@@ -143,21 +216,25 @@ def print_comparison(baseline, model_result):
         f"{'YES' if action_match else 'NO'}"
     )
 
-    if not severity_match or not action_match:
+    if severity_match and action_match:
         print()
         print(
-            "NOTE: The deterministic policy and "
-            "AI decision model disagree."
+            "RESULT: Policy and AI decision model agree."
         )
+    else:
+        print()
         print(
-            "The MVP reports the disagreement; "
-            "it does not automatically override "
-            "the deterministic policy."
+            "RESULT: Policy and AI decision model disagree."
+        )
+
+        print(
+            "The AI recommendation does not automatically "
+            "override deterministic policy."
         )
 
 
 def main():
-    component = (
+    component_name = (
         sys.argv[1]
         if len(sys.argv) > 1
         else "PostgreSQL"
@@ -167,45 +244,58 @@ def main():
     print("=" * 60)
     print("AGENTIC DEPENDENCY INTELLIGENCE")
     print("=" * 60)
+
     print()
-    print(f"Scenario: {component} unavailable")
+    print(
+        f"Scenario: {component_name} unavailable"
+    )
 
     analyzer = ImpactAnalyzer()
-    baseline_engine = DecisionEngine()
+    policy_engine = DecisionEngine()
     ai_model = DecisionModelClient()
 
     try:
-        # -------------------------------------------------
-        # Step 1: Obtain real dependency evidence from Neo4j
-        # -------------------------------------------------
+        # -----------------------------------------------------
+        # Step 1
+        # Retrieve real dependency evidence from Neo4j
+        # -----------------------------------------------------
 
-        impact = analyzer.analyze(component)
+        impact = analyzer.analyze(
+            component_name
+        )
 
         if not impact:
             print()
             print(
-                f"Component '{component}' "
+                f"Component '{component_name}' "
                 "was not found in the dependency graph."
             )
+
             return
 
-        print_impact(impact)
-
-        # -------------------------------------------------
-        # Step 2: Deterministic policy baseline
-        # -------------------------------------------------
-
-        baseline = baseline_engine.evaluate(
+        print_impact(
             impact
         )
 
-        print_baseline_decision(
-            baseline
+        # -----------------------------------------------------
+        # Step 2
+        # Deterministic policy evaluation
+        # -----------------------------------------------------
+
+        policy_decision = (
+            policy_engine.evaluate(
+                impact
+            )
         )
 
-        # -------------------------------------------------
-        # Step 3: Julia-1 probabilistic decision model
-        # -------------------------------------------------
+        print_policy_decision(
+            policy_decision
+        )
+
+        # -----------------------------------------------------
+        # Step 3
+        # Julia-1 probabilistic decision
+        # -----------------------------------------------------
 
         try:
             model_result = ai_model.evaluate(
@@ -216,12 +306,13 @@ def main():
                 model_result
             )
 
-            # ---------------------------------------------
-            # Step 4: Compare deterministic vs AI decisions
-            # ---------------------------------------------
+            # -------------------------------------------------
+            # Step 4
+            # Compare policy and AI results
+            # -------------------------------------------------
 
             print_comparison(
-                baseline,
+                policy_decision,
                 model_result,
             )
 
@@ -231,18 +322,19 @@ def main():
             print("-" * 60)
 
             print(
-                "Julia-1 decision service unavailable "
+                "Julia-1 decision service is unavailable "
                 "or returned an error."
             )
 
+            print()
             print(
                 f"Error: {exc}"
             )
 
             print()
             print(
-                "The deterministic policy decision "
-                "remains available."
+                "The deterministic policy result remains "
+                "available."
             )
 
     finally:
