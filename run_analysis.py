@@ -6,6 +6,10 @@ from decision.model_client import (
     DecisionModelClient,
     print_model_decision,
 )
+from rag.context_builder import (
+    ContextBuilder,
+    print_context,
+)
 
 
 def print_impact(impact):
@@ -253,6 +257,7 @@ def main():
     analyzer = ImpactAnalyzer()
     policy_engine = DecisionEngine()
     ai_model = DecisionModelClient()
+    context_builder = ContextBuilder()
 
     try:
         # -----------------------------------------------------
@@ -277,6 +282,19 @@ def main():
             impact
         )
 
+        # -----------------------------------------------------
+        # GraphRAG
+        # Retrieve operational knowledge using components
+        # discovered by Neo4j
+        # -----------------------------------------------------
+
+        rag_context = context_builder.build(
+            impact
+        )
+
+        print_context(
+            rag_context
+        )
         # -----------------------------------------------------
         # Step 2
         # Deterministic policy evaluation
