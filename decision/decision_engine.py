@@ -38,6 +38,7 @@ class DecisionEngine:
         if component.get("redundancy") is False:
             score += 2
             reasons.append("NO_REDUNDANCY")
+            
 
         # Blast-radius size
         impacted_count = (
