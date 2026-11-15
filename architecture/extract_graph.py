@@ -102,7 +102,7 @@ def call_vision_model(image_base64):
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=600) as response:
+        with urllib.request.urlopen(request, timeout=1600) as response:
             response_body = response.read().decode("utf-8")
             return json.loads(response_body)
     except urllib.error.HTTPError as exc:
