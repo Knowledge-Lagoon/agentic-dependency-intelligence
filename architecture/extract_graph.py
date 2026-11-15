@@ -8,653 +8,292 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-IMAGE_PATH = (
-    BASE_DIR
-    / "architecture"
-    / "input"
-    / "architecture.png"
-)
+IMAGE_PATH = BASE_DIR / "architecture" / "input" / "architecture.png"
+OUTPUT_DIR = BASE_DIR / "architecture" / "output"
+OUTPUT_PATH = OUTPUT_DIR / "extracted_graph.json"
+RAW_OUTPUT_PATH = OUTPUT_DIR / "vision_raw_response.txt"
 
-OUTPUT_DIR = (
-    BASE_DIR
-    / "architecture"
-    / "output"
-)
+VISION_URL = "http://127.0.0.1:8081/v1/chat/completions"
 
-OUTPUT_PATH = (
-    OUTPUT_DIR
-    / "extracted_graph.json"
-)
-
-RAW_OUTPUT_PATH = (
-    OUTPUT_DIR
-    / "vision_raw_response.txt"
-)
-
-VISION_URL = (
-    "http://127.0.0.1:8081/v1/chat/completions"
-)
-
-
-ALLOWED_COMPONENT_TYPES = [
+ALLOWED_COMPONENT_TYPES = {
     "Application",
     "Service",
     "Database",
     "ExternalSystem",
-]
+}
 
-ALLOWED_RELATIONSHIP_TYPES = [
+ALLOWED_RELATIONSHIP_TYPES = {
     "USES",
     "DEPENDS_ON",
     "CONNECTS_TO",
-]
-
+}
 
 PROMPT = """
 Analyze the supplied software architecture diagram.
 
-Extract the architecture as structured graph data.
-
-IMPORTANT:
-
-- Extract only components visibly present in the diagram.
-- Do not invent components.
-- Do not describe what components might do.
-- Do not produce architecture explanations.
-- Do not treat legend labels as components.
-- Do not duplicate components.
-- Ignore decorative icons.
-- Ignore section headings unless they represent real components.
-- Follow visible arrow directions carefully.
-- Do not infer a connection merely because two components
-  are visually close.
-- If a connection is unclear, omit it.
+Extract only architecture components and connections that are clearly visible in the diagram.
 
 Allowed component types:
-
-Application
-Service
-Database
-ExternalSystem
+- Application
+- Service
+- Database
+- ExternalSystem
 
 Allowed relationship types:
+- USES
+- DEPENDS_ON
+- CONNECTS_TO
 
-USES
-DEPENDS_ON
-CONNECTS_TO
-
-Return ONLY structured JSON.
-
-Required structure:
-
+Return JSON only in this shape:
 {
   "components": [
-    {
-      "name": "component name",
-      "type": "Application"
-    }
+    {"name": "component name", "type": "Application"}
   ],
   "relationships": [
-    {
-      "source": "source component",
-      "target": "target component",
-      "type": "USES"
-    }
+    {"source": "component name", "target": "component name", "type": "USES"}
   ]
 }
 
-Do not return Markdown.
-
-Do not return explanations.
-
-Do not number components.
-
-Do not include text before or after the JSON.
+Rules:
+1. Only include components that are clearly visible in the architecture diagram.
+2. Do not treat legend entries or labels as components.
+3. Do not invent components not present in the diagram.
+4. Use exact component names as they appear in the diagram when possible.
+5. Names are case-sensitive and must match exactly across sources and targets.
+6. Return valid JSON, no markdown fences, no commentary.
 """
 
 
-def encode_image(path):
-    """
-    Read architecture image and convert it to base64
-    for the llama.cpp multimodal API.
-    """
-
-    with path.open("rb") as file:
+def encode_image(image_path):
+    with image_path.open("rb") as file:
         image_bytes = file.read()
 
-    return base64.b64encode(
-        image_bytes
-    ).decode("utf-8")
+    return base64.b64encode(image_bytes).decode("utf-8")
 
 
 def build_payload(image_base64):
-    """
-    Build the multimodal request sent to SmolVLM2.
-    """
-
     return {
+        "model": "gpt-4o-mini",
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "text",
-                        "text": PROMPT,
-                    },
+                    {"type": "text", "text": PROMPT},
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": (
-                                "data:image/png;base64,"
-                                + image_base64
-                            )
+                            "url": f"data:image/png;base64,{image_base64}",
                         },
                     },
                 ],
             }
         ],
-
-        # Keep extraction deterministic where the model/runtime
-        # supports this behaviour.
-        "temperature": 0,
-
-        # Architecture graph JSON should be significantly smaller
-        # than a general prose response.
         "max_tokens": 1200,
     }
 
 
 def call_vision_model(image_base64):
-    """
-    Send architecture diagram to the local SmolVLM2
-    llama.cpp server.
-    """
-
-    payload = build_payload(
-        image_base64
-    )
-
-    data = json.dumps(
-        payload
-    ).encode("utf-8")
-
+    payload = build_payload(image_base64)
     request = urllib.request.Request(
         VISION_URL,
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-        },
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
         method="POST",
     )
 
     try:
-        with urllib.request.urlopen(
-            request,
-
-            # CPU-only vision inference on our 2-vCPU server
-            # can take several minutes.
-            timeout=600,
-
-        ) as response:
-
-            body = response.read().decode(
-                "utf-8"
-            )
-
-            return json.loads(
-                body
-            )
-
+        with urllib.request.urlopen(request, timeout=600) as response:
+            response_body = response.read().decode("utf-8")
+            return json.loads(response_body)
     except urllib.error.HTTPError as exc:
-
-        error_body = exc.read().decode(
-            "utf-8",
-            errors="replace",
-        )
-
+        error_body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(
-            f"Vision server returned HTTP "
-            f"{exc.code}: {error_body}"
+            f"Vision server returned HTTP {exc.code}: {error_body}"
         ) from exc
-
     except urllib.error.URLError as exc:
-
         raise RuntimeError(
-            "Unable to connect to vision server "
-            f"at {VISION_URL}: {exc}"
+            f"Could not connect to vision server at {VISION_URL}: {exc}"
         ) from exc
+    except TimeoutError as exc:
+        raise RuntimeError("Vision model request timed out.") from exc
 
 
 def extract_content(response):
-    """
-    Extract assistant response text from llama.cpp's
-    OpenAI-compatible chat-completions response.
-    """
-
     try:
-        return (
-            response["choices"][0]
-            ["message"]["content"]
-        )
-
-    except (
-        KeyError,
-        IndexError,
-        TypeError,
-    ) as exc:
-
+        return response["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
         raise ValueError(
-            "Unexpected response structure from "
-            "vision model."
+            "Unexpected response format from the vision model."
         ) from exc
 
 
 def save_raw_response(content):
-    """
-    Always preserve the raw vision output.
-
-    This is especially important when JSON parsing fails,
-    because vision inference is comparatively expensive.
-    """
-
-    OUTPUT_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    RAW_OUTPUT_PATH.write_text(
-        content,
-        encoding="utf-8",
-    )
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    RAW_OUTPUT_PATH.write_text(content, encoding="utf-8")
 
 
 def clean_json_text(text):
-    """
-    Clean common Markdown wrappers from model output.
+    text = str(text).strip()
 
-    This does NOT attempt to convert arbitrary prose into JSON.
-    If the model returns prose, validation should fail.
-    """
+    text = re.sub(r"^```json\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^```\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
 
-    text = text.strip()
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if match:
+        return match.group(0).strip()
 
-    text = re.sub(
-        r"^```json\s*",
-        "",
-        text,
-     *  flags=re.IGNORECASE,
-    )
-
-    *ext = re.sub(
-        r"^```\s*",
-*       "",
-        text,
-    )
-
-  * text = re.sub(
-        r"\s*```$"*
-        "",
-        text,
-    )
-
-*   return text.strip()
+    return text.strip()
 
 
-def valid*te_basic_structure(graph):
-    """*    Perform basic structural valid*tion before writing
-    extracted *raph data.
-    """
+def validate_structure(graph):
+    if not isinstance(graph, dict):
+        raise ValueError("Extracted graph must be a JSON object.")
 
-    if not isi*stance(
-        graph,
-        dic*,
-    ):
-        raise ValueError(*            "Extracted result is n*t a JSON object."
-        )
+    components = graph.get("components")
+    relationships = graph.get("relationships")
 
-    i* "components" not in graph:
-      * raise ValueError(
-            "Ex*racted graph is missing "
-        *   "'components'."
-        )
+    if not isinstance(components, list):
+        raise ValueError("'components' must be a list.")
 
-    *f "relationships" not in graph:
-  *     raise ValueError(
-           *"Extracted graph is missing "
-    *       "'relationships'."
-        *
+    if not isinstance(relationships, list):
+        raise ValueError("'relationships' must be a list.")
 
-    if not isinstance(
-        g*aph["components"],
-        list,
- *  ):
-        raise ValueError(
-   *        "'components' must be a li*t."
-        )
 
-    if not isinstan*e(
-        graph["relationships"],*        list,
-    ):
-        raise*ValueError(
-            "'relation*hips' must be a list."
-        )
+def validate_components(graph):
+    seen_components = set()
 
-*def validate_components(graph):
-  * """
-    Validate component struct*re and allowed types.
-    """
+    for component in graph["components"]:
+        if not isinstance(component, dict):
+            raise ValueError("Each component must be a JSON object.")
 
-   *seen_names = set()
+        name = component.get("name")
+        component_type = component.get("type")
 
-    for compon*nt in graph["components"]:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("A component is missing its name.")
 
-      * if not isinstance(
-            co*ponent,
-            dict,
-        *:
+        if component_type not in ALLOWED_COMPONENT_TYPES:
             raise ValueError(
-  *             "Every component must*be "
-                "a JSON objec*."
+                f"Unsupported component type '{component_type}' for '{name}'"
             )
 
-        name = c*mponent.get(
-            "name"
-  *     )
+        normalized_name = name.strip().lower()
+        if normalized_name in seen_components:
+            raise ValueError(f"Duplicate component: {name}")
 
-        component_type = c*mponent.get(
-            "type"
-  *     )
-
-        if not name:
-     *      raise ValueError(
-          *     "Component missing name."
-   *        )
-
-        if component_ty*e not in (
-            ALLOWED_COM*ONENT_TYPES
-        ):
-           *raise ValueError(
-                *"Unsupported component type "
-    *           f"'{component_type}' fo* '{name}'."
-            )
-
-       *normalized_name = (
-            na*e.strip().lower()
-        )
-
-     *  if normalized_name in seen_names*
-            raise ValueError(
-   *            f"Duplicate component:*{name}"
-            )
-
-        see*_names.add(
-            normalized*name
-        )
+        seen_components.add(normalized_name)
 
 
-def validate_rela*ionships(graph):
-    """
-    Valid*te relationship structure.
+def validate_relationships(graph):
+    component_names = {component["name"].strip() for component in graph["components"]}
+    seen_relationships = set()
 
-    Bo*h source and target must correspon* to components
-    extracted from *he diagram.
-    """
+    for relationship in graph["relationships"]:
+        if not isinstance(relationship, dict):
+            raise ValueError("Each relationship must be a JSON object.")
 
-    component*names = {
-        component["name"]
-        for component
-        in *raph["components"]
-    }
+        source = relationship.get("source")
+        target = relationship.get("target")
+        relationship_type = relationship.get("type")
 
-    seen*relationships = set()
-
-    for rel*tionship in graph[
-        "relationships"
-    ]:
-
-        if not isi*stance(
-            relationship,
-*           dict,
-        ):
-      *     raise ValueError(
-           *    "Every relationship must be "
-*               "a JSON object."
-  *         )
-
-        source = relat*onship.get(
-            "source"
- *      )
-
-        target = relation*hip.get(
-            "target"
-    *   )
-
-        relationship_type = *
-            relationship.get("typ*")
-        )
-
-        if not sourc*:
-            raise ValueError(
-                "Relationship missing source."
-            )
+        if not source:
+            raise ValueError("A relationship is missing its source.")
 
         if not target:
-            raise ValueError(
-                "Relationship missing target."
-            )
+            raise ValueError("A relationship is missing its target.")
 
-        if relationship_type not in (
-            ALLOWED_RELATIONSHIP_TYPES
-        ):
+        if relationship_type not in ALLOWED_RELATIONSHIP_TYPES:
             raise ValueError(
-                f"Unsupported relationship type: "
-                f"{relationship_type}"
+                f"Unsupported relationship type: {relationship_type}"
             )
 
         if source not in component_names:
-            raise ValueError(
-                f"Relationship source '{source}' "
-                "does not exist in components."
-            )
+            raise ValueError(f"Unknown relationship source: {source}")
 
         if target not in component_names:
-            raise ValueError(
-                f"Relationship target '{target}' "
-                "does not exist in components."
-            )
+            raise ValueError(f"Unknown relationship target: {target}")
 
         if source == target:
+            raise ValueError(f"Self relationship detected: {source}")
+
+        relationship_key = (source, target, relationship_type)
+        if relationship_key in seen_relationships:
             raise ValueError(
-                f"Self-relationship detected: "
-                f"{source}"
+                f"Duplicate relationship: {source} -> {target} ({relationship_type})"
             )
 
-        relationship_key = (
-            source,
-            target,
-            relationship_type,
-        )
-
-        if relationship_key in (
-            seen_relationships
-        ):
-            raise ValueError(
-                "Duplicate relationship: "
-                f"{source} -> {target} "
-                f"({relationship_type})"
-            )
-
-        seen_relationships.add(
-            relationship_key
-        )
+        seen_relationships.add(relationship_key)
 
 
 def save_graph(graph):
-    """
-    Save validated extracted graph.
-    """
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    OUTPUT_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    with OUTPUT_PATH.open(
-        "w",
-        encoding="utf-8",
-    ) as file:
-
-        json.dump(
-            graph,
-            file,
-            indent=2,
-        )
+    with OUTPUT_PATH.open("w", encoding="utf-8") as file:
+        json.dump(graph, file, indent=2)
 
 
 def main():
-
     print()
-    print(
-        "ARCHITECTURE DIAGRAM EXTRACTION"
-    )
+    print("ARCHITECTURE DIAGRAM EXTRACTION")
     print("=" * 60)
 
     if not IMAGE_PATH.exists():
+        raise FileNotFoundError(f"Architecture image not found: {IMAGE_PATH}")
 
-        raise FileNotFoundError(
-            "Architecture image not found: "
-            f"{IMAGE_PATH}"
-        )
-
-    print(
-        f"Input: {IMAGE_PATH}"
-    )
+    print(f"Input: {IMAGE_PATH}")
 
     print()
-    print(
-        "Encoding architecture diagram..."
-    )
+    print("Encoding architecture diagram...")
 
-    image_base64 = encode_image(
-        IMAGE_PATH
-    )
+    image_base64 = encode_image(IMAGE_PATH)
 
-    print(
-        "Sending diagram to vision model..."
-    )
+    print("Sending diagram to vision model...")
 
-    response = call_vision_model(
-        image_base64
-    )
+    response = call_vision_model(image_base64)
+    content = extract_content(response)
 
-    content = extract_content(
-        response
-    )
-
-    save_raw_response(
-        content
-    )
+    save_raw_response(content)
 
     print()
-    print(
-        "Raw vision response saved to:"
-    )
+    print("Raw response saved to:")
+    print(RAW_OUTPUT_PATH)
 
-    print(
-        RAW_OUTPUT_PATH
-    )
-
-    cleaned = clean_json_text(
-        content
-    )
+    cleaned_content = clean_json_text(content)
 
     try:
-
-        graph = json.loads(
-            cleaned
-        )
-
+        graph = json.loads(cleaned_content)
     except json.JSONDecodeError as exc:
+        print()
+        print("ERROR: Vision model did not return valid JSON.")
 
         print()
-        print(
-            "ERROR: Vision model did not "
-            "return valid JSON."
-        )
-
-        print()
-        print(
-            "The raw response has been "
-            "preserved at:"
-        )
-
-        print(
-            RAW_OUTPUT_PATH
-        )
-
-        print()
-        print(
-            "First 500 characters of "
-            "raw response:"
-        )
-
-        print()
-        print(
-            content[:500]
-        )
+        print("Raw model output is available at:")
+        print(RAW_OUTPUT_PATH)
 
         raise RuntimeError(
-            "Architecture extraction failed "
-            "because the model response was "
-            "not valid JSON."
+            "Architecture graph extraction failed because the model response was not valid JSON."
         ) from exc
 
-    validate_basic_structure(
-        graph
-    )
+    validate_structure(graph)
+    validate_components(graph)
+    validate_relationships(graph)
 
-    validate_components(
-        graph
-    )
-
-    validate_relationships(
-        graph
-    )
-
-    save_graph(
-        graph
-    )
+    save_graph(graph)
 
     print()
-    print(
-        "Extraction complete."
-    )
+    print("Extraction completed successfully.")
 
     print()
-    print(
-        f"Components:    "
-        f"{len(graph['components'])}"
-    )
-
-    print(
-        f"Relationships: "
-        f"{len(graph['relationships'])}"
-    )
+    print(f"Components: {len(graph['components'])}")
+    print(f"Relationships: {len(graph['relationships'])}")
 
     print()
-    print(
-        "Extracted graph saved to:"
-    )
-
-    print(
-        OUTPUT_PATH
-    )
+    print("Extracted graph saved to:")
+    print(OUTPUT_PATH)
 
     print()
-    print(
-        "IMPORTANT: Review the extracted "
-        "graph before loading it into Neo4j."
-    )
+    print("Review the extracted graph before loading it into Neo4j.")
 
 
 if __name__ == "__main__":
