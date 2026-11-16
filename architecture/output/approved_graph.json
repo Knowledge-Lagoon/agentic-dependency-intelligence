@@ -1,0 +1,108 @@
+{
+  "components": [
+    {
+      "name": "Customer Portal",
+      "type": "Application"
+    },
+    {
+      "name": "Admin Portal",
+      "type": "Application"
+    },
+    {
+      "name": "Mobile App",
+      "type": "Application"
+    },
+    {
+      "name": "Order Service",
+      "type": "Service"
+    },
+    {
+      "name": "Payment Service",
+      "type": "Service"
+    },
+    {
+      "name": "Authentication Service",
+      "type": "Service"
+    },
+    {
+      "name": "Notification Service",
+      "type": "Service"
+    },
+    {
+      "name": "PostgreSQL",
+      "type": "Database"
+    },
+    {
+      "name": "User Database",
+      "type": "Database"
+    },
+    {
+      "name": "Audit Database",
+      "type": "Database"
+    },
+    {
+      "name": "Email Service",
+      "type": "ExternalSystem"
+    },
+    {
+      "name": "SMS Gateway",
+      "type": "ExternalSystem"
+    },
+    {
+      "name": "Payment Gateway",
+      "type": "ExternalSystem"
+    }
+  ],
+  "relationships": [
+    {
+      "source": "Customer Portal",
+      "target": "Order Service",
+      "type": "USES"
+    },
+    {
+      "source": "Order Service",
+      "target": "Payment Service",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "Payment Service",
+      "target": "Authentication Service",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "Payment Service",
+      "target": "PostgreSQL",
+      "type": "USES"
+    },
+    {
+      "source": "Authentication Service",
+      "target": "User Database",
+      "type": "USES"
+    },
+    {
+      "source": "Order Service",
+      "target": "Notification Service",
+      "type": "DEPENDS_ON"
+    },
+    {
+      "source": "Notification Service",
+      "target": "Audit Database",
+      "type": "USES"
+    },
+    {
+      "source": "Notification Service",
+      "target": "Email Service",
+      "type": "CONNECTS_TO"
+    },
+    {
+      "source": "Notification Service",
+      "target": "SMS Gateway",
+      "type": "CONNECTS_TO"
+    },
+    {
+      "source": "Payment Service",
+      "target": "Payment Gateway",
+      "type": "CONNECTS_TO"
+    }
+  ]
+}

@@ -5,4 +5,4 @@ __pycache__/
 *.pyc
 
 # Generated architecture extraction
-architecture/output/
+#architecture/output/
