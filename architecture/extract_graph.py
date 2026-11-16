@@ -150,7 +150,7 @@ def call_vision_model(image_base64):
     try:
         with urllib.request.urlopen(
             request,
-            timeout=600,
+            timeout=1600,
         ) as response:
 
             response_body = response.read().decode("utf-8")
