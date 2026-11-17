@@ -1,4 +1,4 @@
-cat > run_analysis.py <<'PY'
+
 import argparse
 
 from analysis.impact_analyzer import (
