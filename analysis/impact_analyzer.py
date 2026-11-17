@@ -1,13 +1,26 @@
 import os
+
 from neo4j import GraphDatabase
 
 
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+NEO4J_URI = os.getenv(
+    "NEO4J_URI",
+    "bolt://localhost:7687",
+)
+
+NEO4J_USERNAME = os.getenv(
+    "NEO4J_USERNAME",
+    "neo4j",
+)
+
+NEO4J_PASSWORD = os.getenv(
+    "NEO4J_PASSWORD"
+)
 
 if not NEO4J_PASSWORD:
-    raise RuntimeError("NEO4J_PASSWORD environment variable is not set")
+    raise RuntimeError(
+        "NEO4J_PASSWORD environment variable is not set"
+    )
 
 
 class ImpactAnalyzer:
@@ -15,94 +28,154 @@ class ImpactAnalyzer:
     def __init__(self):
         self.driver = GraphDatabase.driver(
             NEO4J_URI,
-            auth=(NEO4J_USERNAME, NEO4J_PASSWORD),
+            auth=(
+                NEO4J_USERNAME,
+                NEO4J_PASSWORD,
+            ),
         )
 
     def close(self):
         self.driver.close()
 
-    def analyze(self, component_name):
-
+    def analyze(
+        self,
+        component_name,
+        source=None,
+    ):
         query = """
         MATCH (component {name: $component_name})
+
+        WHERE
+            $source IS NULL
+            OR component.source = $source
 
         OPTIONAL MATCH path =
             (affected)-[:USES|DEPENDS_ON*1..10]->(component)
 
-        WITH component,
-             collect(DISTINCT {
-                 id: affected.id,
-                 name: affected.name,
-                 type: labels(affected)[0],
-                 distance: length(path),
-                 customer_facing: affected.customer_facing,
-                 critical: affected.critical
-             }) AS impacted
+        WHERE
+            $source IS NULL
+            OR affected.source = $source
+
+        WITH
+            component,
+            collect(
+                DISTINCT {
+                    id: affected.id,
+                    name: affected.name,
+                    type: labels(affected)[0],
+                    distance: length(path),
+                    customer_facing:
+                        affected.customer_facing,
+                    critical:
+                        affected.critical,
+                    source:
+                        affected.source
+                }
+            ) AS impacted
 
         OPTIONAL MATCH
-            (service:Service)-[:USES|DEPENDS_ON*0..10]->(component)
+            (service:Service)
+            -[:USES|DEPENDS_ON*0..10]->
+            (component)
+
+        WHERE
+            $source IS NULL
+            OR service.source = $source
 
         OPTIONAL MATCH
             (service)-[:OWNED_BY]->(team:Team)
 
+        WHERE
+            $source IS NULL
+            OR team.source = $source
+            OR team.source IS NULL
+
         OPTIONAL MATCH
-            (service)-[:RUNS_IN]->(environment:Environment)
+            (service)-[:RUNS_IN]->
+            (environment:Environment)
+
+        WHERE
+            $source IS NULL
+            OR environment.source = $source
+            OR environment.source IS NULL
 
         RETURN
             component.id AS component_id,
             component.name AS component_name,
             labels(component)[0] AS component_type,
 
-            component.customer_facing AS component_customer_facing,
-            component.critical AS component_critical,
-            component.redundancy AS component_redundancy,
+            component.customer_facing
+                AS component_customer_facing,
+
+            component.critical
+                AS component_critical,
+
+            component.redundancy
+                AS component_redundancy,
+
+            component.source
+                AS component_source,
 
             impacted,
 
-            collect(DISTINCT team.name) AS owners,
-            collect(DISTINCT environment.name) AS environments
+            collect(
+                DISTINCT team.name
+            ) AS owners,
+
+            collect(
+                DISTINCT environment.name
+            ) AS environments
         """
 
         with self.driver.session() as session:
+            records = list(
+                session.run(
+                    query,
+                    component_name=component_name,
+                    source=source,
+                )
+            )
 
-            record = session.run(
-                query,
-                component_name=component_name,
-            ).single()
+        if not records:
+            return None
 
-            if not record:
-                return None
+        result = records[0].data()
 
-            result = record.data()
+        if result["component_name"] is None:
+            return None
 
         impacted = [
             item
             for item in result["impacted"]
-            if item["id"] is not None
+            if item.get("id") is not None
+            or item.get("name") is not None
         ]
 
         direct = [
             item
             for item in impacted
-            if item["distance"] == 1
+            if item.get("distance") == 1
         ]
 
         indirect = [
             item
             for item in impacted
-            if item["distance"] > 1
+            if (
+                item.get("distance") is not None
+                and item["distance"] > 1
+            )
         ]
 
         affected_services = [
             item
             for item in impacted
-            if item["type"] == "Service"
+            if item.get("type") == "Service"
         ]
 
         affected_applications = [
             item
             for item in impacted
-            if item["type"] == "Application"
+            if item.get("type") == "Application"
         ]
 
         critical_services = [
@@ -121,47 +194,96 @@ class ImpactAnalyzer:
             (
                 item["distance"]
                 for item in impacted
-                if item["distance"] is not None
+                if item.get("distance") is not None
             ),
             default=0,
         )
 
-        return {
-            "component": {
-                "id": result["component_id"],
-                "name": result["component_name"],
-                "type": result["component_type"],
+        environments = [
+            name
+            for name in result["environments"]
+            if name is not None
+        ]
 
-                "critical": result["component_critical"],
+        owners = [
+            name
+            for name in result["owners"]
+            if name is not None
+        ]
+
+        return {
+            "graph_source": (
+                source
+                or result["component_source"]
+            ),
+
+            "component": {
+                "id":
+                    result["component_id"],
+
+                "name":
+                    result["component_name"],
+
+                "type":
+                    result["component_type"],
+
+                "critical":
+                    result[
+                        "component_critical"
+                    ],
+
                 "customer_facing":
-                    result["component_customer_facing"],
+                    result[
+                        "component_customer_facing"
+                    ],
+
                 "redundancy":
-                    result["component_redundancy"],
+                    result[
+                        "component_redundancy"
+                    ],
+
+                "source":
+                    result[
+                        "component_source"
+                    ],
             },
 
-            "direct_impact": direct,
-            "indirect_impact": indirect,
+            "direct_impact":
+                direct,
 
-            "affected_services": affected_services,
-            "affected_applications": affected_applications,
+            "indirect_impact":
+                indirect,
 
-            "owners": result["owners"],
-            "environments": result["environments"],
+            "affected_services":
+                affected_services,
+
+            "affected_applications":
+                affected_applications,
+
+            "owners":
+                owners,
+
+            "environments":
+                environments,
 
             "production_impact":
-                "PROD" in result["environments"],
+                "PROD" in environments,
 
             "critical_service_impact":
                 len(critical_services) > 0,
 
             "customer_facing_service_impact":
-                len(customer_facing_services) > 0,
+                len(
+                    customer_facing_services
+                ) > 0,
 
             "affected_service_count":
                 len(affected_services),
 
             "affected_application_count":
-                len(affected_applications),
+                len(
+                    affected_applications
+                ),
 
             "direct_impact_count":
                 len(direct),
@@ -177,7 +299,9 @@ class ImpactAnalyzer:
 def print_report(report):
 
     if not report:
-        print("Component not found.")
+        print(
+            "Component not found."
+        )
         return
 
     component = report["component"]
@@ -186,41 +310,72 @@ def print_report(report):
     print("FAILED COMPONENT")
     print("=" * 60)
 
-    print(f"Component:        {component['name']}")
-    print(f"Type:             {component['type']}")
-    print(f"Critical:         {component['critical']}")
+    print(
+        f"Component:        "
+        f"{component['name']}"
+    )
+
+    print(
+        f"Type:             "
+        f"{component['type']}"
+    )
+
+    print(
+        f"Graph source:     "
+        f"{report['graph_source']}"
+    )
+
+    print(
+        f"Critical:         "
+        f"{component['critical']}"
+    )
+
     print(
         f"Customer-facing:  "
         f"{component['customer_facing']}"
     )
-    print(f"Redundancy:       {component['redundancy']}")
+
+    print(
+        f"Redundancy:       "
+        f"{component['redundancy']}"
+    )
 
     print()
     print("BLAST RADIUS")
     print("=" * 60)
 
-    print("\nDirect impact:")
+    print()
+    print("Direct impact:")
 
     if not report["direct_impact"]:
         print("  None")
 
-    for item in report["direct_impact"]:
+    for item in report[
+        "direct_impact"
+    ]:
         print(
             f"  - {item['name']} "
             f"[{item['type']}]"
         )
 
-    print("\nIndirect impact:")
+    print()
+    print("Indirect impact:")
 
-    if not report["indirect_impact"]:
+    if not report[
+        "indirect_impact"
+    ]:
         print("  None")
 
     for item in sorted(
         report["indirect_impact"],
-        key=lambda x: (x["distance"], x["name"]),
+        key=lambda x: (
+            x["distance"],
+            x["name"],
+        ),
     ):
         print(
-            f"  - Level {item['distance']}: "
+            f"  - Level "
+            f"{item['distance']}: "
             f"{item['name']} "
             f"[{item['type']}]"
         )
@@ -230,63 +385,47 @@ def print_report(report):
     print("=" * 60)
 
     print(
-        f"Production impact:             "
+        "Production impact:              "
         f"{report['production_impact']}"
     )
 
     print(
-        f"Critical service impact:       "
+        "Critical service impact:        "
         f"{report['critical_service_impact']}"
     )
 
     print(
-        f"Customer-facing service impact:"
-        f" {report['customer_facing_service_impact']}"
+        "Customer-facing service impact: "
+        f"{report['customer_facing_service_impact']}"
     )
 
     print(
-        f"Affected services:             "
+        "Affected services:              "
         f"{report['affected_service_count']}"
     )
 
     print(
-        f"Affected applications:         "
+        "Affected applications:          "
         f"{report['affected_application_count']}"
     )
 
     print(
-        f"Maximum dependency depth:      "
+        "Maximum dependency depth:       "
         f"{report['max_dependency_depth']}"
     )
 
-    print("\nOwners:")
 
-    if not report["owners"]:
-        print("  None")
-
-    for owner in report["owners"]:
-        print(f"  - {owner}")
-
-    print("\nEnvironments:")
-
-    if not report["environments"]:
-        print("  None")
-
-    for environment in report["environments"]:
-        print(f"  - {environment}")
-
-
-def main():
-
+if __name__ == "__main__":
     analyzer = ImpactAnalyzer()
 
     try:
-        report = analyzer.analyze("PostgreSQL")
-        print_report(report)
+        report = analyzer.analyze(
+            "PostgreSQL"
+        )
+
+        print_report(
+            report
+        )
 
     finally:
         analyzer.close()
-
-
-if __name__ == "__main__":
-    main()
