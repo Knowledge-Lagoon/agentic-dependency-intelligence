@@ -4,8 +4,6 @@ import sys
 from pathlib import Path
 
 
-# Allow execution as:
-# python agent/dependency_agent.py ...
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 if str(BASE_DIR) not in sys.path:
@@ -15,16 +13,13 @@ if str(BASE_DIR) not in sys.path:
 from analysis.impact_analyzer import ImpactAnalyzer
 from decision.decision_engine import DecisionEngine
 from decision.model_client import DecisionModelClient
-from rag.context_builder import (
-    ContextBuilder,
-    build_agent_context,
-)
+from rag.context_builder import ContextBuilder, build_agent_context
 from rag.generator import GroundedGenerator
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Agentic Dependency Intelligence Agent"
+        description="Agentic Dependency Intelligence"
     )
 
     parser.add_argument(
@@ -35,10 +30,7 @@ def parse_args():
     parser.add_argument(
         "--source",
         default=None,
-        help=(
-            "Restrict analysis to a graph source, "
-            "for example architecture_diagram"
-        ),
+        help="Graph source such as architecture_diagram",
     )
 
     return parser.parse_args()
@@ -56,68 +48,47 @@ class DependencyAgent:
     def close(self):
         self.analyzer.close()
 
-    def _get_component_names(self, source=None):
+    def get_component_names(self, source=None):
         query = """
         MATCH (n)
-
-        WHERE
-            n.name IS NOT NULL
-            AND (
-                $source IS NULL
-                OR n.source = $source
-            )
-
+        WHERE n.name IS NOT NULL
+          AND ($source IS NULL OR n.source = $source)
         RETURN DISTINCT n.name AS name
         ORDER BY size(n.name) DESC
         """
 
         with self.analyzer.driver.session() as session:
-            records = session.run(
+            result = session.run(
                 query,
                 source=source,
             )
 
             return [
                 record["name"]
-                for record in records
+                for record in result
                 if record["name"]
             ]
 
-    def identify_component(
-        self,
-        question,
-        source=None,
-    ):
-        """
-        Find a known Neo4j component name inside
-        the user's natural-language question.
-
-        Longer names are checked first so that
-        'Payment Service' wins over generic words.
-        """
-
-        component_names = self._get_component_names(
+    def identify_component(self, question, source=None):
+        names = self.get_component_names(
             source=source
         )
 
         question_lower = question.lower()
 
-        for component_name in component_names:
+        for name in names:
             pattern = (
                 r"\b"
-                + re.escape(component_name.lower())
+                + re.escape(name.lower())
                 + r"\b"
             )
 
-            if re.search(
-                pattern,
-                question_lower,
-            ):
-                return component_name
+            if re.search(pattern, question_lower):
+                return name
 
         return None
 
-    def _build_decision_summary(
+    def build_decision_summary(
         self,
         policy_decision,
         ai_result,
@@ -139,45 +110,29 @@ class DependencyAgent:
             )
 
             return {
-                "severity": severity.get(
-                    "choice"
-                ),
-                "action": action.get(
-                    "choice"
-                ),
-                "confidence": action.get(
-                    "confidence"
-                ),
+                "severity": severity.get("choice"),
+                "action": action.get("choice"),
+                "confidence": action.get("confidence"),
             }
 
         return {
-            "severity": policy_decision[
-                "severity"
-            ],
-            "action": policy_decision[
-                "decision"
-            ],
+            "severity": policy_decision["severity"],
+            "action": policy_decision["decision"],
             "confidence": None,
         }
 
-    def analyze(
-        self,
-        question,
-        source=None,
-    ):
-        component_name = (
-            self.identify_component(
-                question,
-                source=source,
-            )
+    def analyze(self, question, source=None):
+        component_name = self.identify_component(
+            question,
+            source=source,
         )
 
         if not component_name:
             return {
                 "success": False,
                 "message": (
-                    "I could not identify a known "
-                    "component from the question."
+                    "Could not identify a known component "
+                    "from the question."
                 ),
             }
 
@@ -190,51 +145,37 @@ class DependencyAgent:
             return {
                 "success": False,
                 "message": (
-                    f"Component '{component_name}' "
-                    "was found by name but no matching "
-                    "dependency graph could be analysed."
+                    f"No dependency information found for "
+                    f"'{component_name}'."
                 ),
             }
 
-        policy_decision = (
-            self.policy_engine.evaluate(
-                impact
-            )
+        rag_context = self.context_builder.build(
+            impact
         )
 
-        rag_context = (
-            self.context_builder.build(
-                impact
-            )
+        context_text = build_agent_context(
+            rag_context
         )
 
-        context_text = (
-            build_agent_context(
-                rag_context
-            )
+        policy_decision = self.policy_engine.evaluate(
+            impact
         )
 
         ai_result = None
         decision_warning = None
 
         try:
-            ai_result = (
-                self.decision_model.evaluate(
-                    impact
-                )
+            ai_result = self.decision_model.evaluate(
+                impact
             )
 
         except Exception as exc:
-            decision_warning = (
-                "Julia-1 decision model unavailable: "
-                f"{exc}"
-            )
+            decision_warning = str(exc)
 
-        decision_summary = (
-            self._build_decision_summary(
-                policy_decision,
-                ai_result,
-            )
+        decision_summary = self.build_decision_summary(
+            policy_decision,
+            ai_result,
         )
 
         generation_warning = None
@@ -247,15 +188,11 @@ class DependencyAgent:
             )
 
         except Exception as exc:
-            generation_warning = (
-                "Generation model unavailable: "
-                f"{exc}"
-            )
+            generation_warning = str(exc)
 
-            answer = self._fallback_answer(
+            answer = self.fallback_answer(
                 impact,
                 rag_context,
-                policy_decision,
                 decision_summary,
             )
 
@@ -266,26 +203,23 @@ class DependencyAgent:
             "impact": impact,
             "rag_context": rag_context,
             "policy_decision": policy_decision,
-            "ai_decision": ai_result,
             "decision_summary": decision_summary,
             "answer": answer,
             "decision_warning": decision_warning,
             "generation_warning": generation_warning,
         }
 
-    def _fallback_answer(
+    def fallback_answer(
         self,
         impact,
         rag_context,
-        policy_decision,
-        decision_summary,
+        decision,
     ):
         lines = []
 
-        component = impact["component"]
-
         lines.append(
-            f"Component: {component['name']}"
+            f"Component: "
+            f"{impact['component']['name']}"
         )
 
         lines.append("")
@@ -322,9 +256,7 @@ class DependencyAgent:
         lines.append("")
         lines.append("Relevant documents:")
 
-        documents = rag_context[
-            "documents"
-        ]
+        documents = rag_context["documents"]
 
         if documents:
             for document in documents:
@@ -336,15 +268,12 @@ class DependencyAgent:
 
         lines.append("")
         lines.append(
-            "Deterministic policy: "
-            f"{policy_decision['severity']} / "
-            f"{policy_decision['decision']}"
+            f"Severity: {decision.get('severity')}"
         )
 
         lines.append(
-            "Decision model: "
-            f"{decision_summary.get('severity')} / "
-            f"{decision_summary.get('action')}"
+            f"Recommended action: "
+            f"{decision.get('action')}"
         )
 
         return "\n".join(lines)
@@ -368,50 +297,42 @@ def print_result(result):
 
     print(
         "Graph source: "
-        f"{result['source'] or 'all/default'}"
+        f"{result['source'] or 'default'}"
     )
 
-    if result.get(
-        "decision_warning"
-    ):
+    if result["decision_warning"]:
         print()
         print(
-            "WARNING: "
+            "Decision model warning: "
             f"{result['decision_warning']}"
         )
 
-    if result.get(
-        "generation_warning"
-    ):
+    if result["generation_warning"]:
         print()
         print(
-            "WARNING: "
+            "Generation model warning: "
             f"{result['generation_warning']}"
         )
 
     print()
     print("GROUNDED ANSWER")
     print("-" * 60)
-
     print()
-    print(
-        result["answer"]
-    )
+
+    print(result["answer"])
+
+    decision = result["decision_summary"]
 
     print()
     print("-" * 60)
 
-    decision = result[
-        "decision_summary"
-    ]
-
     print(
-        "Decision: "
+        f"Decision: "
         f"{decision.get('action')}"
     )
 
     print(
-        "Severity: "
+        f"Severity: "
         f"{decision.get('severity')}"
     )
 
@@ -421,7 +342,7 @@ def print_result(result):
 
     if confidence is not None:
         print(
-            "Decision confidence: "
+            f"Decision confidence: "
             f"{confidence:.1%}"
         )
 
@@ -432,13 +353,13 @@ def print_result(result):
         "rag_context"
     ]["documents"]
 
-    if not documents:
-        print("  None")
-    else:
+    if documents:
         for document in documents:
             print(
                 f"  - {document['title']}"
             )
+    else:
+        print("  None")
 
     print()
     print("=" * 60)
@@ -455,9 +376,7 @@ def main():
             source=args.source,
         )
 
-        print_result(
-            result
-        )
+        print_result(result)
 
     finally:
         agent.close()
