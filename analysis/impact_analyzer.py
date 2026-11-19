@@ -37,6 +37,181 @@ class ImpactAnalyzer:
     def close(self):
         self.driver.close()
 
+    def calculate_graph_risk(
+        self,
+        direct_impact,
+        indirect_impact,
+        affected_applications,
+        max_dependency_depth,
+    ):
+        """
+        Calculate topology-based operational risk.
+
+        This is independent of declared criticality.
+
+        MVP scoring:
+
+        Each direct dependency impact       +2
+        Each indirect dependency impact     +1
+        Each affected application           +2
+        Dependency depth >= 3               +2
+        Dependency depth >= 5               +1 additional
+
+        Risk levels:
+
+        0-2   LOW
+        3-5   MEDIUM
+        6-8   HIGH
+        9+    CRITICAL
+        """
+
+        score = 0
+        reasons = []
+
+        direct_count = len(
+            direct_impact
+        )
+
+        indirect_count = len(
+            indirect_impact
+        )
+
+        application_count = len(
+            affected_applications
+        )
+
+        if direct_count > 0:
+            points = (
+                direct_count * 2
+            )
+
+            score += points
+
+            reasons.append(
+                {
+                    "reason":
+                        "DIRECT_DEPENDENCY_IMPACT",
+
+                    "description":
+                        f"{direct_count} directly "
+                        "affected component(s)",
+
+                    "points":
+                        points,
+                }
+            )
+
+        if indirect_count > 0:
+            points = (
+                indirect_count
+            )
+
+            score += points
+
+            reasons.append(
+                {
+                    "reason":
+                        "INDIRECT_DEPENDENCY_IMPACT",
+
+                    "description":
+                        f"{indirect_count} indirectly "
+                        "affected component(s)",
+
+                    "points":
+                        points,
+                }
+            )
+
+        if application_count > 0:
+            points = (
+                application_count * 2
+            )
+
+            score += points
+
+            reasons.append(
+                {
+                    "reason":
+                        "APPLICATION_IMPACT",
+
+                    "description":
+                        f"{application_count} affected "
+                        "application(s)",
+
+                    "points":
+                        points,
+                }
+            )
+
+        if max_dependency_depth >= 3:
+            score += 2
+
+            reasons.append(
+                {
+                    "reason":
+                        "DEEP_DEPENDENCY_CHAIN",
+
+                    "description":
+                        "Maximum dependency depth "
+                        "is at least 3",
+
+                    "points":
+                        2,
+                }
+            )
+
+        if max_dependency_depth >= 5:
+            score += 1
+
+            reasons.append(
+                {
+                    "reason":
+                        "VERY_DEEP_DEPENDENCY_CHAIN",
+
+                    "description":
+                        "Maximum dependency depth "
+                        "is at least 5",
+
+                    "points":
+                        1,
+                }
+            )
+
+        if score >= 9:
+            level = "CRITICAL"
+
+        elif score >= 6:
+            level = "HIGH"
+
+        elif score >= 3:
+            level = "MEDIUM"
+
+        else:
+            level = "LOW"
+
+        return {
+            "level":
+                level,
+
+            "score":
+                score,
+
+            "direct_count":
+                direct_count,
+
+            "indirect_count":
+                indirect_count,
+
+            "affected_application_count":
+                application_count,
+
+            "max_dependency_depth":
+                max_dependency_depth,
+
+            "reasons":
+                reasons,
+        }
+
     def analyze(
         self,
         component_name,
@@ -50,7 +225,9 @@ class ImpactAnalyzer:
             OR component.source = $source
 
         OPTIONAL MATCH path =
-            (affected)-[:USES|DEPENDS_ON*1..10]->(component)
+            (affected)
+            -[:USES|DEPENDS_ON*1..10]->
+            (component)
 
         WHERE
             $source IS NULL
@@ -60,14 +237,27 @@ class ImpactAnalyzer:
             component,
             collect(
                 DISTINCT {
-                    id: affected.id,
-                    name: affected.name,
-                    type: labels(affected)[0],
-                    distance: length(path),
+                    id:
+                        affected.id,
+
+                    name:
+                        affected.name,
+
+                    type:
+                        labels(affected)[0],
+
+                    distance:
+                        length(path),
+
                     customer_facing:
                         affected.customer_facing,
+
                     critical:
                         affected.critical,
+
+                    redundancy:
+                        affected.redundancy,
+
                     source:
                         affected.source
                 }
@@ -83,7 +273,8 @@ class ImpactAnalyzer:
             OR service.source = $source
 
         OPTIONAL MATCH
-            (service)-[:OWNED_BY]->(team:Team)
+            (service)-[:OWNED_BY]->
+            (team:Team)
 
         WHERE
             $source IS NULL
@@ -100,9 +291,14 @@ class ImpactAnalyzer:
             OR environment.source IS NULL
 
         RETURN
-            component.id AS component_id,
-            component.name AS component_name,
-            labels(component)[0] AS component_type,
+            component.id
+                AS component_id,
+
+            component.name
+                AS component_name,
+
+            labels(component)[0]
+                AS component_type,
 
             component.customer_facing
                 AS component_customer_facing,
@@ -128,11 +324,15 @@ class ImpactAnalyzer:
         """
 
         with self.driver.session() as session:
+
             records = list(
                 session.run(
                     query,
-                    component_name=component_name,
-                    source=source,
+                    component_name=
+                        component_name,
+
+                    source=
+                        source,
                 )
             )
 
@@ -141,111 +341,162 @@ class ImpactAnalyzer:
 
         result = records[0].data()
 
-        if result["component_name"] is None:
+        if result.get(
+            "component_name"
+        ) is None:
             return None
 
         impacted = [
             item
-            for item in result["impacted"]
-            if item.get("id") is not None
-            or item.get("name") is not None
+            for item in result.get(
+                "impacted",
+                [],
+            )
+            if item.get("name")
+            is not None
         ]
 
         direct = [
             item
             for item in impacted
-            if item.get("distance") == 1
+            if item.get(
+                "distance"
+            ) == 1
         ]
 
         indirect = [
             item
             for item in impacted
             if (
-                item.get("distance") is not None
-                and item["distance"] > 1
+                item.get(
+                    "distance"
+                )
+                is not None
+                and
+                item["distance"] > 1
             )
         ]
 
         affected_services = [
             item
             for item in impacted
-            if item.get("type") == "Service"
+            if item.get(
+                "type"
+            ) == "Service"
         ]
 
         affected_applications = [
             item
             for item in impacted
-            if item.get("type") == "Application"
+            if item.get(
+                "type"
+            ) == "Application"
         ]
 
         critical_services = [
             item
             for item in affected_services
-            if item.get("critical") is True
+            if item.get(
+                "critical"
+            ) is True
         ]
 
         customer_facing_services = [
             item
             for item in affected_services
-            if item.get("customer_facing") is True
+            if item.get(
+                "customer_facing"
+            ) is True
         ]
 
         max_dependency_depth = max(
             (
                 item["distance"]
                 for item in impacted
-                if item.get("distance") is not None
+                if item.get(
+                    "distance"
+                )
+                is not None
             ),
             default=0,
         )
 
-        environments = [
-            name
-            for name in result["environments"]
-            if name is not None
+        owners = [
+            owner
+            for owner in result.get(
+                "owners",
+                [],
+            )
+            if owner is not None
         ]
 
-        owners = [
-            name
-            for name in result["owners"]
-            if name is not None
+        environments = [
+            environment
+            for environment in result.get(
+                "environments",
+                [],
+            )
+            if environment is not None
         ]
+
+        graph_risk = (
+            self.calculate_graph_risk(
+                direct_impact=
+                    direct,
+
+                indirect_impact=
+                    indirect,
+
+                affected_applications=
+                    affected_applications,
+
+                max_dependency_depth=
+                    max_dependency_depth,
+            )
+        )
 
         return {
-            "graph_source": (
+            "graph_source":
                 source
-                or result["component_source"]
-            ),
+                or result.get(
+                    "component_source"
+                ),
 
             "component": {
                 "id":
-                    result["component_id"],
+                    result.get(
+                        "component_id"
+                    ),
 
                 "name":
-                    result["component_name"],
+                    result.get(
+                        "component_name"
+                    ),
 
                 "type":
-                    result["component_type"],
+                    result.get(
+                        "component_type"
+                    ),
 
                 "critical":
-                    result[
+                    result.get(
                         "component_critical"
-                    ],
+                    ),
 
                 "customer_facing":
-                    result[
+                    result.get(
                         "component_customer_facing"
-                    ],
+                    ),
 
                 "redundancy":
-                    result[
+                    result.get(
                         "component_redundancy"
-                    ],
+                    ),
 
                 "source":
-                    result[
+                    result.get(
                         "component_source"
-                    ],
+                    ),
             },
 
             "direct_impact":
@@ -270,7 +521,9 @@ class ImpactAnalyzer:
                 "PROD" in environments,
 
             "critical_service_impact":
-                len(critical_services) > 0,
+                len(
+                    critical_services
+                ) > 0,
 
             "customer_facing_service_impact":
                 len(
@@ -278,7 +531,9 @@ class ImpactAnalyzer:
                 ) > 0,
 
             "affected_service_count":
-                len(affected_services),
+                len(
+                    affected_services
+                ),
 
             "affected_application_count":
                 len(
@@ -286,14 +541,28 @@ class ImpactAnalyzer:
                 ),
 
             "direct_impact_count":
-                len(direct),
+                len(
+                    direct
+                ),
 
             "indirect_impact_count":
-                len(indirect),
+                len(
+                    indirect
+                ),
 
             "max_dependency_depth":
                 max_dependency_depth,
+
+            "graph_risk":
+                graph_risk,
         }
+
+
+def display_value(value):
+    if value is None:
+        return "UNKNOWN"
+
+    return value
 
 
 def print_report(report):
@@ -304,14 +573,16 @@ def print_report(report):
         )
         return
 
-    component = report["component"]
+    component = report[
+        "component"
+    ]
 
     print()
     print("FAILED COMPONENT")
     print("=" * 60)
 
     print(
-        f"Component:        "
+        f"Name:             "
         f"{component['name']}"
     )
 
@@ -322,22 +593,22 @@ def print_report(report):
 
     print(
         f"Graph source:     "
-        f"{report['graph_source']}"
+        f"{display_value(report['graph_source'])}"
     )
 
     print(
         f"Critical:         "
-        f"{component['critical']}"
+        f"{display_value(component['critical'])}"
     )
 
     print(
         f"Customer-facing:  "
-        f"{component['customer_facing']}"
+        f"{display_value(component['customer_facing'])}"
     )
 
     print(
         f"Redundancy:       "
-        f"{component['redundancy']}"
+        f"{display_value(component['redundancy'])}"
     )
 
     print()
@@ -347,16 +618,20 @@ def print_report(report):
     print()
     print("Direct impact:")
 
-    if not report["direct_impact"]:
-        print("  None")
-
-    for item in report[
+    if not report[
         "direct_impact"
     ]:
-        print(
-            f"  - {item['name']} "
-            f"[{item['type']}]"
-        )
+        print("  None")
+
+    else:
+        for item in report[
+            "direct_impact"
+        ]:
+            print(
+                f"  - {item['name']} "
+                f"[{item['type']}] "
+                f"Level {item['distance']}"
+            )
 
     print()
     print("Indirect impact:")
@@ -366,19 +641,21 @@ def print_report(report):
     ]:
         print("  None")
 
-    for item in sorted(
-        report["indirect_impact"],
-        key=lambda x: (
-            x["distance"],
-            x["name"],
-        ),
-    ):
-        print(
-            f"  - Level "
-            f"{item['distance']}: "
-            f"{item['name']} "
-            f"[{item['type']}]"
-        )
+    else:
+        for item in sorted(
+            report[
+                "indirect_impact"
+            ],
+            key=lambda item: (
+                item["distance"],
+                item["name"],
+            ),
+        ):
+            print(
+                f"  - {item['name']} "
+                f"[{item['type']}] "
+                f"Level {item['distance']}"
+            )
 
     print()
     print("IMPACT SUMMARY")
@@ -414,8 +691,48 @@ def print_report(report):
         f"{report['max_dependency_depth']}"
     )
 
+    graph_risk = report[
+        "graph_risk"
+    ]
+
+    print()
+    print("GRAPH RISK")
+    print("=" * 60)
+
+    print(
+        f"Level: "
+        f"{graph_risk['level']}"
+    )
+
+    print(
+        f"Score: "
+        f"{graph_risk['score']}"
+    )
+
+    print()
+    print("Risk evidence:")
+
+    if not graph_risk[
+        "reasons"
+    ]:
+        print(
+            "  - No downstream dependency "
+            "risk detected."
+        )
+
+    else:
+        for reason in graph_risk[
+            "reasons"
+        ]:
+            print(
+                f"  - "
+                f"{reason['description']}: "
+                f"+{reason['points']}"
+            )
+
 
 if __name__ == "__main__":
+
     analyzer = ImpactAnalyzer()
 
     try:
