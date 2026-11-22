@@ -29,6 +29,12 @@ Rules:
 12. Do not repeat guidance, bullets, sentences, or recommendations.
 13. Include each distinct operational recommendation only once.
 14. Graph-derived risk and declared criticality are separate concepts.
+15. Never call a component critical unless declared criticality is True.
+16. Never call a workload production unless production impact is True.
+17. Never call a component customer-facing unless its metadata is True.
+18. UNKNOWN metadata cannot support escalation or impact claims.
+19. A LOW graph-risk score does not prove business impact is absent,
+    but it must not be rewritten as critical or production impact.
 """
 
 

@@ -166,6 +166,52 @@ def build_authoritative_answer(impact):
     return "\n".join(lines)
 
 
+def has_positive_operational_evidence(impact):
+    """
+    Return True only when the graph contains explicit evidence
+    supporting elevated operational impact.
+
+    UNKNOWN values do not count as positive evidence.
+    """
+    component = impact["component"]
+
+    return any(
+        (
+            impact.get("production_impact") is True,
+            impact.get("critical_service_impact") is True,
+            impact.get(
+                "customer_facing_service_impact"
+            ) is True,
+            component.get("critical") is True,
+            component.get("customer_facing") is True,
+            component.get("redundancy") is False,
+        )
+    )
+
+
+def should_use_policy_guardrail(impact, ai_result):
+    """
+    Prevent a probabilistic model from escalating a LOW-risk,
+    zero-blast-radius case based only on UNKNOWN metadata.
+    """
+    if not ai_result:
+        return False
+
+    graph_risk = impact.get("graph_risk") or {}
+
+    no_blast_radius = (
+        impact.get("direct_impact_count", 0) == 0
+        and impact.get("indirect_impact_count", 0) == 0
+    )
+
+    return (
+        graph_risk.get("level") == "LOW"
+        and graph_risk.get("score", 0) == 0
+        and no_blast_radius
+        and not has_positive_operational_evidence(impact)
+    )
+
+
 class DependencyAgent:
 
     def __init__(self):
@@ -316,6 +362,25 @@ class DependencyAgent:
             ai_result,
         )
 
+        decision_source = (
+            "AI_DECISION_MODEL"
+            if ai_result
+            else "DETERMINISTIC_POLICY"
+        )
+
+        if should_use_policy_guardrail(
+            impact,
+            ai_result,
+        ):
+            decision_summary = self.build_decision_summary(
+                policy_decision,
+                None,
+            )
+
+            decision_source = (
+                "DETERMINISTIC_POLICY_GUARDRAIL"
+            )
+
         generation_warning = None
 
         try:
@@ -352,6 +417,7 @@ class DependencyAgent:
             "rag_context": rag_context,
             "policy_decision": policy_decision,
             "decision_summary": decision_summary,
+            "decision_source": decision_source,
             "answer": answer,
             "decision_warning": decision_warning,
             "generation_warning": generation_warning,
@@ -482,6 +548,11 @@ def print_result(result):
     print(
         f"Severity: "
         f"{decision.get('severity')}"
+    )
+
+    print(
+        f"Decision source: "
+        f"{result.get('decision_source', 'UNKNOWN')}"
     )
 
     confidence = decision.get(
