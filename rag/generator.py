@@ -22,6 +22,13 @@ Rules:
 5. Clearly distinguish direct and indirect impact.
 6. If information is unavailable, say that it is unavailable.
 7. Keep the response concise and operational.
+8. The failed component has status FAILED and distance 0.
+9. Components listed under direct or indirect impact are AFFECTED.
+10. Never describe an impacted component as Unaffected.
+11. UNKNOWN metadata means unavailable, not False.
+12. Do not repeat guidance, bullets, sentences, or recommendations.
+13. Include each distinct operational recommendation only once.
+14. Graph-derived risk and declared criticality are separate concepts.
 """
 
 
@@ -59,11 +66,20 @@ GROUNDED CONTEXT
 
 Using only this information, provide:
 
-1. Impact summary
-2. Direct impact
-3. Indirect impact
-4. Relevant operational guidance
-5. Recommended action
+1. Relevant operational guidance
+2. Recommended action
+
+Do not reproduce the impact summary, failed component,
+direct impact, or indirect impact. Those sections are rendered
+deterministically from Neo4j by the application.
+
+Status rules:
+- The failed component is FAILED at distance 0.
+- Direct and indirect dependencies are AFFECTED.
+- Never label an impacted component Unaffected.
+- Use UNKNOWN when metadata is unavailable.
+- Include each operational recommendation only once.
+- Do not repeat equivalent guidance in different wording.
 
 Do not introduce facts not present in the supplied context.
 """

@@ -1,4 +1,81 @@
+import re
+
+
 from rag.retriever import GraphRetriever
+
+
+def normalize_text(value):
+    """Normalize text for stable duplicate detection."""
+    return re.sub(
+        r"\\s+",
+        " ",
+        value.strip().lower(),
+    )
+
+
+def deduplicate_document_content(content):
+    """
+    Remove repeated operational guidance while preserving
+    headings, order and the first occurrence of each item.
+
+    This protects the generation model from repeated evidence.
+    """
+    seen = set()
+    output = []
+
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        if not stripped:
+            if output and output[-1] != "":
+                output.append("")
+            continue
+
+        comparable = stripped
+
+        if comparable.startswith(("-", "*")):
+            comparable = comparable[1:].strip()
+
+        key = normalize_text(comparable)
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        output.append(line.rstrip())
+
+    while output and output[-1] == "":
+        output.pop()
+
+    return "\\n".join(output)
+
+
+def deduplicate_documents(documents):
+    """
+    Remove duplicate documents and clean repeated lines inside
+    each document.
+    """
+    seen_documents = set()
+    cleaned_documents = []
+
+    for document in documents:
+        cleaned = dict(document)
+        cleaned["content"] = deduplicate_document_content(
+            document.get("content", "")
+        )
+
+        identity = (
+            normalize_text(document.get("title", "")),
+            normalize_text(cleaned["content"]),
+        )
+
+        if identity in seen_documents:
+            continue
+
+        seen_documents.add(identity)
+        cleaned_documents.append(cleaned)
+
+    return cleaned_documents
 
 
 def display_value(value):
@@ -42,6 +119,10 @@ class ContextBuilder:
 
         documents = self.retriever.retrieve(
             component_names
+        )
+
+        documents = deduplicate_documents(
+            documents
         )
 
         context = {
@@ -255,6 +336,8 @@ def build_agent_context(context):
         f"Type: {component['type']}\n"
         f"Graph source: "
         f"{display_value(context['graph_source'])}\n"
+        f"Status: FAILED\n"
+        f"Distance: 0\n"
         f"Declared criticality: "
         f"{display_value(component.get('critical'))}\n"
         f"Customer-facing metadata: "
@@ -275,7 +358,8 @@ def build_agent_context(context):
         direct_lines.append(
             f"- {item['name']} "
             f"| type={item['type']} "
-            f"| distance={item['distance']}"
+            f"| distance={item['distance']} "
+            f"| status=AFFECTED"
         )
 
     if not direct_lines:
@@ -306,7 +390,8 @@ def build_agent_context(context):
         indirect_lines.append(
             f"- {item['name']} "
             f"| type={item['type']} "
-            f"| distance={item['distance']}"
+            f"| distance={item['distance']} "
+            f"| status=AFFECTED"
         )
 
     if not indirect_lines:

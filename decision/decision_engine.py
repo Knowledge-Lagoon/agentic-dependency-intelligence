@@ -59,15 +59,30 @@ class DecisionEngine:
             score += 1
             reasons.append("DEEP_DEPENDENCY_CHAIN")
 
-        if score >= 10:
+        # Topology-derived risk remains useful when architecture
+        # metadata such as criticality or environment is UNKNOWN.
+        graph_risk = impact.get("graph_risk") or {}
+        graph_risk_level = graph_risk.get("level")
+
+        if graph_risk_level == "CRITICAL":
+            score += 4
+            reasons.append("CRITICAL_GRAPH_RISK")
+        elif graph_risk_level == "HIGH":
+            score += 3
+            reasons.append("HIGH_GRAPH_RISK")
+        elif graph_risk_level == "MEDIUM":
+            score += 2
+            reasons.append("MEDIUM_GRAPH_RISK")
+
+        if score >= 9:
             severity = "CRITICAL"
             decision = "ESCALATE"
 
-        elif score >= 7:
+        elif score >= 6:
             severity = "HIGH"
             decision = "ESCALATE"
 
-        elif score >= 4:
+        elif score >= 3:
             severity = "MEDIUM"
             decision = "INVESTIGATE"
 

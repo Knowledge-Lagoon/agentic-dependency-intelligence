@@ -13,6 +13,7 @@ class DecisionModelClient:
     def evaluate(self, impact):
 
         component = impact["component"]
+        graph_risk = impact.get("graph_risk") or {}
 
         state = {
             "failed_component": component["name"],
@@ -50,6 +51,20 @@ class DecisionModelClient:
 
             "maximum_dependency_depth":
                 impact["max_dependency_depth"],
+
+            "graph_risk_level":
+                graph_risk.get("level"),
+
+            "graph_risk_score":
+                graph_risk.get("score"),
+
+            "graph_risk_reasons": [
+                reason.get("description")
+                for reason in graph_risk.get(
+                    "reasons",
+                    [],
+                )
+            ],
 
             "affected_services": [
                 item["name"]

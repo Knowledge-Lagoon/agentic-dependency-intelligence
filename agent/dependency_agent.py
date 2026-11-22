@@ -36,6 +36,136 @@ def parse_args():
     return parser.parse_args()
 
 
+def display_value(value):
+    if value is None:
+        return "UNKNOWN"
+
+    if isinstance(value, bool):
+        return str(value)
+
+    return str(value)
+
+
+def build_authoritative_answer(impact):
+    """
+    Render authoritative dependency facts directly from the
+    ImpactAnalyzer result.
+
+    The generative model must not reconstruct these sections.
+    """
+    lines = []
+
+    component = impact["component"]
+    graph_risk = impact.get("graph_risk") or {}
+
+    # -----------------------------------------------------
+    # 1. Impact summary
+    # -----------------------------------------------------
+
+    lines.append("1. Impact Summary")
+
+    lines.append(
+        "- Production impact: "
+        f"{display_value(impact['production_impact'])}"
+    )
+
+    lines.append(
+        "- Critical service impact: "
+        f"{display_value(impact['critical_service_impact'])}"
+    )
+
+    lines.append(
+        "- Customer-facing service impact: "
+        f"{display_value(impact['customer_facing_service_impact'])}"
+    )
+
+    lines.append(
+        "- Affected services: "
+        f"{impact['affected_service_count']}"
+    )
+
+    lines.append(
+        "- Affected applications: "
+        f"{impact['affected_application_count']}"
+    )
+
+    lines.append(
+        "- Maximum dependency depth: "
+        f"{impact['max_dependency_depth']}"
+    )
+
+    lines.append(
+        "- Graph risk: "
+        f"{display_value(graph_risk.get('level'))}"
+    )
+
+    lines.append(
+        "- Graph risk score: "
+        f"{display_value(graph_risk.get('score'))}"
+    )
+
+    # -----------------------------------------------------
+    # Failed component
+    # -----------------------------------------------------
+
+    lines.append("")
+    lines.append("2. Failed Component")
+
+    lines.append(
+        f"- {component['name']} "
+        f"(Type: {component['type']}, "
+        f"distance=0, status=FAILED)"
+    )
+
+    # -----------------------------------------------------
+    # Direct impact
+    # -----------------------------------------------------
+
+    lines.append("")
+    lines.append("3. Direct Impact")
+
+    direct = impact["direct_impact"]
+
+    if direct:
+        for item in direct:
+            lines.append(
+                f"- {item['name']} "
+                f"(Type: {item['type']}, "
+                f"distance={item['distance']}, "
+                f"status=AFFECTED)"
+            )
+    else:
+        lines.append("- None")
+
+    # -----------------------------------------------------
+    # Indirect impact
+    # -----------------------------------------------------
+
+    lines.append("")
+    lines.append("4. Indirect Impact")
+
+    indirect = sorted(
+        impact["indirect_impact"],
+        key=lambda item: (
+            item["distance"],
+            item["name"],
+        ),
+    )
+
+    if indirect:
+        for item in indirect:
+            lines.append(
+                f"- {item['name']} "
+                f"(Type: {item['type']}, "
+                f"distance={item['distance']}, "
+                f"status=AFFECTED)"
+            )
+    else:
+        lines.append("- None")
+
+    return "\n".join(lines)
+
+
 class DependencyAgent:
 
     def __init__(self):
@@ -189,10 +319,20 @@ class DependencyAgent:
         generation_warning = None
 
         try:
-            answer = self.generator.generate(
+            generated_guidance = self.generator.generate(
                 question=question,
                 context_text=context_text,
                 decision=decision_summary,
+            )
+
+            authoritative_answer = build_authoritative_answer(
+                impact
+            )
+
+            answer = (
+                authoritative_answer
+                + "\n\n"
+                + generated_guidance
             )
 
         except Exception as exc:

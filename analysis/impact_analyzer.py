@@ -356,6 +356,12 @@ class ImpactAnalyzer:
             is not None
         ]
 
+        # All nodes returned by the dependency traversal are
+        # downstream affected components. The failed component
+        # itself is represented separately with distance 0.
+        for item in impacted:
+            item["status"] = "AFFECTED"
+
         direct = [
             item
             for item in impacted
@@ -455,6 +461,51 @@ class ImpactAnalyzer:
             )
         )
 
+        # Preserve UNKNOWN when graph metadata is absent.
+        #
+        # False should mean that metadata was available and
+        # explicitly showed no such impact. It must not mean
+        # that the property was missing from the architecture
+        # diagram.
+        production_impact = (
+            "PROD" in environments
+            if environments
+            else None
+        )
+
+        critical_values = [
+            item.get("critical")
+            for item in affected_services
+        ]
+
+        if any(value is True for value in critical_values):
+            critical_service_impact = True
+        elif critical_values and all(
+            value is False
+            for value in critical_values
+        ):
+            critical_service_impact = False
+        else:
+            critical_service_impact = None
+
+        customer_facing_values = [
+            item.get("customer_facing")
+            for item in affected_services
+        ]
+
+        if any(
+            value is True
+            for value in customer_facing_values
+        ):
+            customer_facing_service_impact = True
+        elif customer_facing_values and all(
+            value is False
+            for value in customer_facing_values
+        ):
+            customer_facing_service_impact = False
+        else:
+            customer_facing_service_impact = None
+
         return {
             "graph_source":
                 source
@@ -497,6 +548,12 @@ class ImpactAnalyzer:
                     result.get(
                         "component_source"
                     ),
+
+                "status":
+                    "FAILED",
+
+                "distance":
+                    0,
             },
 
             "direct_impact":
@@ -518,17 +575,13 @@ class ImpactAnalyzer:
                 environments,
 
             "production_impact":
-                "PROD" in environments,
+                production_impact,
 
             "critical_service_impact":
-                len(
-                    critical_services
-                ) > 0,
+                critical_service_impact,
 
             "customer_facing_service_impact":
-                len(
-                    customer_facing_services
-                ) > 0,
+                customer_facing_service_impact,
 
             "affected_service_count":
                 len(
